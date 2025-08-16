@@ -10,7 +10,6 @@ const subjects = createSubjects({
   }),
 });
 
-// Passwort-Hash Funktionen
 async function hashPassword(password: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(password);
@@ -51,7 +50,6 @@ export default {
           async register(ctx, email, password) {
             const hash = await hashPassword(password);
 
-            // Insert und anschließend ID abrufen, um undefined zu vermeiden
             await env.AUTH_DB.prepare(
               `INSERT INTO user (email, password_hash) VALUES (?, ?)
                ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash`
@@ -61,9 +59,9 @@ export default {
               `SELECT id FROM user WHERE email = ?`
             ).bind(email).first<{ id: string }>();
 
-            if (!row?.id) {
-              throw new Error("Failed to create or fetch user ID");
-            }
+            if (!row?.id) throw new Error("Failed to fetch user ID after register");
+
+            console.log("Register debug:", { email, id: row.id });
 
             return ctx.subject("user", { id: String(row.id) });
           },
@@ -73,9 +71,12 @@ export default {
               `SELECT id, password_hash FROM user WHERE email = ?`
             ).bind(email).first<{ id: string; password_hash: string }>();
 
-            if (!row) throw new Error("User not found");
+            if (!row?.id || !row.password_hash) throw new Error("User not found or invalid data");
+
             const valid = await verifyPassword(password, row.password_hash);
             if (!valid) throw new Error("Invalid password");
+
+            console.log("Login debug:", { email, id: row.id });
 
             return ctx.subject("user", { id: String(row.id) });
           },
