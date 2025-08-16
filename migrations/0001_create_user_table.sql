@@ -1,4 +1,4 @@
--- Migration number: 0001 	 2024-12-27T22:04:18.794Z
+-- Migration number: 0001
 CREATE TABLE IF NOT EXISTS user (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT UNIQUE NOT NULL,
