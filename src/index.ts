@@ -4,12 +4,14 @@ import { PasswordProvider } from "@openauthjs/openauth/provider/password";
 import { createSubjects } from "@openauthjs/openauth/subject";
 import { object, string } from "valibot";
 
+// Subject Definition
 const subjects = createSubjects({
   user: object({
     id: string(),
   }),
 });
 
+// Passwort-Hash Funktionen
 async function hashPassword(password: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(password);
@@ -23,38 +25,25 @@ async function verifyPassword(password: string, hash: string): Promise<boolean> 
   return newHash === hash;
 }
 
+// Worker Handler
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/") {
-      url.searchParams.set("redirect_uri", url.origin + "/callback");
-      url.searchParams.set("client_id", "your-client-id");
-      url.searchParams.set("response_type", "code");
-      url.pathname = "/authorize";
-      return Response.redirect(url.toString());
-    } else if (url.pathname === "/callback") {
-      return Response.json({
-        message: "Login successful!",
-        params: Object.fromEntries(url.searchParams.entries()),
-      });
-    }
-
+    // Direkt den OpenAuth Issuer aufrufen – kein Redirect/Code nötig
     return issuer({
-      storage: CloudflareStorage({
-        namespace: env.AUTH_STORAGE,
-      }),
+      storage: CloudflareStorage({ namespace: env.AUTH_STORAGE }),
       subjects,
       providers: {
         password: PasswordProvider({
           async register(ctx, email, password) {
             const hash = await hashPassword(password);
 
+            // Insert oder Update ohne RETURNING
             await env.AUTH_DB.prepare(
               `INSERT INTO user (email, password_hash) VALUES (?, ?)
                ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash`
             ).bind(email, hash).run();
 
+            // Anschließend ID abfragen
             const row = await env.AUTH_DB.prepare(
               `SELECT id FROM user WHERE email = ?`
             ).bind(email).first<{ id: string }>();
@@ -71,7 +60,7 @@ export default {
               `SELECT id, password_hash FROM user WHERE email = ?`
             ).bind(email).first<{ id: string; password_hash: string }>();
 
-            if (!row?.id || !row.password_hash) throw new Error("User not found or invalid data");
+            if (!row?.id || !row.password_hash) throw new Error("User not found");
 
             const valid = await verifyPassword(password, row.password_hash);
             if (!valid) throw new Error("Invalid password");
