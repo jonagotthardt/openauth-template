@@ -1,9 +1,9 @@
 import { issuer } from "@openauthjs/openauth";
 import { CloudflareStorage } from "@openauthjs/openauth/storage/cloudflare";
 import { PasswordProvider } from "@openauthjs/openauth/provider/password";
-import { PasswordUI } from "@openauthjs/openauth/ui/password";
 import { createSubjects } from "@openauthjs/openauth/subject";
 import { object, string } from "valibot";
+import * as bcrypt from "bcryptjs"; // bcryptjs nutzen für Hash
 
 const subjects = createSubjects({
   user: object({
@@ -12,8 +12,10 @@ const subjects = createSubjects({
 });
 
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
+
+    // Demo redirect
     if (url.pathname === "/") {
       url.searchParams.set("redirect_uri", url.origin + "/callback");
       url.searchParams.set("client_id", "your-client-id");
@@ -22,49 +24,48 @@ export default {
       return Response.redirect(url.toString());
     } else if (url.pathname === "/callback") {
       return Response.json({
-        message: "Login erfolgreich!",
+        message: "Login successful!",
         params: Object.fromEntries(url.searchParams.entries()),
       });
     }
 
+    // OpenAuth Setup
     return issuer({
       storage: CloudflareStorage({
         namespace: env.AUTH_STORAGE,
       }),
       subjects,
       providers: {
-        // 👇 Nur noch klassisches Passwort-Login
-        password: PasswordProvider(
-          PasswordUI()
-        ),
+        password: PasswordProvider({
+          // Registrierung
+          async register(ctx, email, password) {
+            const hash = await bcrypt.hash(password, 10);
+            const result = await env.AUTH_DB.prepare(
+              `INSERT INTO user (email, password_hash) VALUES (?, ?) 
+               ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash
+               RETURNING id;`
+            ).bind(email, hash).first<{ id: string }>();
+            return ctx.subject("user", { id: String(result?.id) });
+          },
+          // Login
+          async login(ctx, email, password) {
+            const row = await env.AUTH_DB.prepare(
+              `SELECT id, password_hash FROM user WHERE email = ?`
+            ).bind(email).first<{ id: string; password_hash: string }>();
+
+            if (!row) throw new Error("User not found");
+
+            const valid = await bcrypt.compare(password, row.password_hash);
+            if (!valid) throw new Error("Invalid password");
+
+            return ctx.subject("user", { id: String(row.id) });
+          },
+        }),
       },
       theme: {
         title: "CommunitySMP Login",
         primary: "#0051c3",
-        favicon: "https://workers.cloudflare.com/favicon.ico",
-      },
-      success: async (ctx, value) => {
-        return ctx.subject("user", {
-          id: await getOrCreateUser(env, value.email),
-        });
       },
     }).fetch(request, env, ctx);
   },
 } satisfies ExportedHandler<Env>;
-
-async function getOrCreateUser(env: Env, email: string): Promise<string> {
-  const result = await env.AUTH_DB.prepare(
-    `
-		INSERT INTO user (email)
-		VALUES (?)
-		ON CONFLICT (email) DO UPDATE SET email = email
-		RETURNING id;
-		`,
-  )
-    .bind(email)
-    .first<{ id: string }>();
-  if (!result) {
-    throw new Error(`Unable to process user: ${email}`);
-  }
-  return result.id;
-}
