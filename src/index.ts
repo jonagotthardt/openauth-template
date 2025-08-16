@@ -50,13 +50,24 @@ export default {
         password: PasswordProvider({
           async register(ctx, email, password) {
             const hash = await hashPassword(password);
-            const result = await env.AUTH_DB.prepare(
-              `INSERT INTO user (email, password_hash) VALUES (?, ?) 
-               ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash
-               RETURNING id;`
-            ).bind(email, hash).first<{ id: string }>();
-            return ctx.subject("user", { id: String(result?.id) });
+
+            // Insert und anschließend ID abrufen, um undefined zu vermeiden
+            await env.AUTH_DB.prepare(
+              `INSERT INTO user (email, password_hash) VALUES (?, ?)
+               ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash`
+            ).bind(email, hash).run();
+
+            const row = await env.AUTH_DB.prepare(
+              `SELECT id FROM user WHERE email = ?`
+            ).bind(email).first<{ id: string }>();
+
+            if (!row?.id) {
+              throw new Error("Failed to create or fetch user ID");
+            }
+
+            return ctx.subject("user", { id: String(row.id) });
           },
+
           async login(ctx, email, password) {
             const row = await env.AUTH_DB.prepare(
               `SELECT id, password_hash FROM user WHERE email = ?`
