@@ -3,7 +3,6 @@ import { CloudflareStorage } from "@openauthjs/openauth/storage/cloudflare";
 import { PasswordProvider } from "@openauthjs/openauth/provider/password";
 import { createSubjects } from "@openauthjs/openauth/subject";
 import { object, string } from "valibot";
-import * as bcrypt from "bcryptjs"; // bcryptjs nutzen für Hash
 
 const subjects = createSubjects({
   user: object({
@@ -11,11 +10,24 @@ const subjects = createSubjects({
   }),
 });
 
+// Passwort-Hash Funktionen
+async function hashPassword(password: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  const newHash = await hashPassword(password);
+  return newHash === hash;
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
 
-    // Demo redirect
     if (url.pathname === "/") {
       url.searchParams.set("redirect_uri", url.origin + "/callback");
       url.searchParams.set("client_id", "your-client-id");
@@ -29,7 +41,6 @@ export default {
       });
     }
 
-    // OpenAuth Setup
     return issuer({
       storage: CloudflareStorage({
         namespace: env.AUTH_STORAGE,
@@ -37,9 +48,8 @@ export default {
       subjects,
       providers: {
         password: PasswordProvider({
-          // Registrierung
           async register(ctx, email, password) {
-            const hash = await bcrypt.hash(password, 10);
+            const hash = await hashPassword(password);
             const result = await env.AUTH_DB.prepare(
               `INSERT INTO user (email, password_hash) VALUES (?, ?) 
                ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash
@@ -47,15 +57,13 @@ export default {
             ).bind(email, hash).first<{ id: string }>();
             return ctx.subject("user", { id: String(result?.id) });
           },
-          // Login
           async login(ctx, email, password) {
             const row = await env.AUTH_DB.prepare(
               `SELECT id, password_hash FROM user WHERE email = ?`
             ).bind(email).first<{ id: string; password_hash: string }>();
 
             if (!row) throw new Error("User not found");
-
-            const valid = await bcrypt.compare(password, row.password_hash);
+            const valid = await verifyPassword(password, row.password_hash);
             if (!valid) throw new Error("Invalid password");
 
             return ctx.subject("user", { id: String(row.id) });
