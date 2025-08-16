@@ -1,6 +1,18 @@
 // src/index.ts
-import { hash } from "bcryptjs"; // Optional: sichere Hash-Bibliothek
-import { compare } from "bcryptjs";
+
+// Passwort-Hash Funktionen mit Web Crypto
+async function hashPassword(password: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  const newHash = await hashPassword(password);
+  return newHash === hash;
+}
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -13,16 +25,13 @@ export default {
         return new Response(JSON.stringify({ error: "Missing email or password" }), { status: 400 });
       }
 
-      // Passwort hashen
-      const password_hash = await hash(password, 10);
+      const password_hash = await hashPassword(password);
 
-      // Insert oder Update in D1
       await env.AUTH_DB.prepare(
         `INSERT INTO users (email, password_hash) VALUES (?, ?)
          ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash`
       ).bind(email, password_hash).run();
 
-      // ID abfragen
       const row = await env.AUTH_DB.prepare(`SELECT id FROM users WHERE email = ?`)
         .bind(email).first<{ id: string }>();
 
@@ -47,7 +56,7 @@ export default {
         return new Response(JSON.stringify({ error: "User not found" }), { status: 404 });
       }
 
-      const valid = await compare(password, row.password_hash);
+      const valid = await verifyPassword(password, row.password_hash);
 
       if (!valid) {
         return new Response(JSON.stringify({ error: "Invalid password" }), { status: 401 });
